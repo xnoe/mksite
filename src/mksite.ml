@@ -289,21 +289,21 @@ let parse t =
   let eat_string () =
     tokens := (match !tokens with
       |(TokStr _)::hd -> hd
-      |[t] -> raise (syntax_error t (TokStr ""))
+      |t::_ -> raise (syntax_error t (TokStr ""))
       |_->raise (Failure("No More Tokens!")));
   in
 
   let eat_symbol () =
     tokens := (match !tokens with
       |(TokSym _)::hd -> hd
-      |[t] -> raise (syntax_error t (TokSym ""))
+      |t::_ -> raise (syntax_error t (TokSym ""))
       |_->raise (Failure("No More Tokens!")));
   in
 
   let eat_number () =
     tokens := (match !tokens with
       |(TokNum _)::hd -> hd
-      |[t] -> raise (syntax_error t (TokNum 0))
+      |t::_ -> raise (syntax_error t (TokNum 0))
       |_->raise (Failure("No More Tokens!")));
   in
 
@@ -540,7 +540,7 @@ let parse t =
     match !tokens with
       |(TokSym "include")::(TokStr s)::_ -> (
         eat_symbol ();
-        eat_symbol ();
+        eat_string ();
         OpInclude (OpString s)
       )
       |_ -> raise (syntax_error (peek () |> unwrap) (TokSym "Include"))
