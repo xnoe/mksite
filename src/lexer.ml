@@ -71,11 +71,7 @@ let string_of_token = function
 
 let explode s = List.init (String.length s) (String.get s)
 
-let string_of_char = function 
-  |'\n' -> "\n"
-  |'\t' -> "\t"
-  |'\b' -> "\b"
-  |c -> Char.escaped c
+let string_of_char = String.make 1
 
 let lex p =
   let rec lex_i = function 
@@ -127,23 +123,27 @@ let lex p =
     )
     |(Symbol, p, currentInt, currentString, tokens) -> (
       match p with 
-        (('a'..'z'|'A'..'Z'|'_') as hd)::tl -> lex_i (Symbol, tl, currentInt, currentString ^ Char.escaped hd, tokens)
+        |(('a'..'z'|'A'..'Z'|'_') as hd)::tl -> lex_i (Symbol, tl, currentInt, currentString ^ Char.escaped hd, tokens)
         |[] -> (TokSym currentString)::tokens
         |p -> lex_i (Code, p, currentInt, "", (TokSym currentString)::tokens)
     )
     |(StringLiteral, p, currentInt, currentString, tokens) -> (
       match p with
-        '"'::tl -> lex_i (Code, tl, currentInt, "", (TokStr currentString)::tokens)
+        |'\\'::'"'::tl -> lex_i (StringLiteral, tl, currentInt, currentString ^ ("\""), tokens)
+        |'"'::tl -> lex_i (Code, tl, currentInt, "", (TokStr currentString)::tokens)
         |hd::tl -> lex_i (StringLiteral, tl, currentInt, currentString ^ (string_of_char hd), tokens)
         |[] -> (TokStr currentString)::tokens
     )
     |(IntLiteral, p, currentInt, currentString, tokens) -> (
       match p with 
-        ('0'..'9' as hd)::tl -> lex_i (IntLiteral, tl, currentInt*10 + int_of_char hd - 0x30, currentString, tokens)
+        |('0'..'9' as hd)::tl -> lex_i (IntLiteral, tl, currentInt*10 + int_of_char hd - 0x30, currentString, tokens)
         |[] -> (TokNum currentInt)::tokens
         |p -> lex_i (Code, p, 0, currentString, (TokNum currentInt)::tokens)
     )
-  in lex_i (Raw, explode p, 0, "", []) |> List.rev
+  in 
+  let result = lex_i (Raw, explode p, 0, "", []) |> List.rev in
+  print_endline "Finished Lexing...";
+  result
 
 let rec print_tokens = function
   (hd::tl) -> (

@@ -12,6 +12,17 @@ type value =
   |ValDict of (value, value) Hashtbl.t
   |ValNone
 
+let string_of_value = function 
+  |ValNumber _ -> "Number"
+  |ValString _ -> "String"
+  |ValBool _ -> "Bool"
+  |ValFunction _ -> "Function"
+  |ValReturn _ -> "Return"
+  |ValScope _ -> "Scope"
+  |ValList _ -> "List"
+  |ValDict _ -> "Dict"
+  |ValNone _ -> "None"
+
 let int_of_valnumber = function
   |ValNumber n -> n
   |_ -> raise (Failure "Invalid type")
@@ -164,8 +175,15 @@ let rec eval ?(path_prefix="") ?(default_assignments=[Hashtbl.create 100]) ast =
             |_ -> raise (Failure ("Type is not callable"))
         )
     )
-    |OpAssign (OpSymb name, rhs) -> (
-      let v = eval_i assignments rhs in
+    |(OpAssign _) as node -> (
+      let rec transform_tree_i rv = function
+        |OpAssign (OpSymb name, rhs) -> (name, rhs)
+        |OpAssign (lhs, rhs) -> transform_tree_i rhs lhs
+        |OpAccess ((OpSymb name) as lhs, rhs) -> (name, OpRep (lhs, rhs, rv))
+        |OpAccess (lhs, rhs) -> transform_tree_i (OpRep (lhs, rhs, rv)) lhs
+      in
+      let (name, transformed) = transform_tree_i OpNop node in
+      let v = eval_i assignments transformed in
       set_assigned name v assignments;
       v
     )
@@ -173,6 +191,30 @@ let rec eval ?(path_prefix="") ?(default_assignments=[Hashtbl.create 100]) ast =
       let v = eval_i assignments rhs in
       set_assigned ~must_exist:false name v assignments;
       v
+    )
+    |OpRep (source, dest, v) -> (
+      match ((eval_i assignments source), (eval_i assignments dest)) with
+        |(ValList l, ValNumber pos) -> (ValList (List.mapi (fun i x -> if i = pos then (eval_i assignments v) else x) l))
+        |(ValDict d, k) -> (Hashtbl.replace d k (eval_i assignments v); ValDict d)
+        |_ -> raise (Failure "Invalid type for indexed assign")
+    )
+    |OpDot (lhs, rhs) -> (
+      match (eval_i assignments lhs) with 
+        |ValScope s -> (
+          eval_i (s@assignments) rhs
+        )
+        |_ -> raise (Failure "Invalid type for dot operator")
+    )
+    |OpAccess (lhs, rhs) -> (
+      match (eval_i assignments lhs, eval_i assignments rhs) with
+        |(ValString s, ValNumber n) -> ValString (string_of_char s.[n])
+        |(ValList l, ValNumber n) -> List.nth l n
+        |(ValDict d, v) -> (
+          match (Hashtbl.find_opt d v) with
+            |Some v -> v
+            |None -> ValNone
+        )
+        |(l,r) -> raise (Failure ("Invalid combination for access: " ^ (string_of_value l) ^ " and " ^ (string_of_value r)))
     )
     |OpEquiv (lhs, rhs) -> (
       match (eval_i assignments lhs, eval_i assignments rhs) with
@@ -254,13 +296,6 @@ let rec eval ?(path_prefix="") ?(default_assignments=[Hashtbl.create 100]) ast =
         )
         |_ -> raise (Failure "Invalid type for incremenet")
     )
-    |OpDot (lhs, rhs) -> (
-      match (eval_i assignments lhs) with 
-        |ValScope s -> (
-          eval_i (s@assignments) rhs
-        )
-        |_ -> raise (Failure "Invalid type for dot operator")
-    )
     |OpProgram u -> (
       eval_i assignments u;
       (match (get_assigned "layout" assignments) with
@@ -271,28 +306,29 @@ let rec eval ?(path_prefix="") ?(default_assignments=[Hashtbl.create 100]) ast =
           let layout_path = "source/_layouts/"^s^".html" in
           if Sys.file_exists layout_path then (
             let ast = parsefile layout_path in
-            acc := eval ~default_assignments:new_scope ~path_prefix:"source/_layouts" ast;
+            acc := eval ~default_assignments:new_scope ~path_prefix:"source/_layouts/" ast;
           )
         )
         | ValNone -> ());
       ValNone
-    )
-    |OpAccess (lhs, rhs) -> (
-      match (eval_i assignments lhs, eval_i assignments rhs) with
-        |(ValString s, ValNumber n) -> ValString (string_of_char s.[n])
-        |(ValList l, ValNumber n) -> List.nth l n
-        |(ValDict d, v) -> (
-          match (Hashtbl.find_opt d v) with
-            |Some v -> v
-            |None -> ValNone
-        )
-        |_ -> raise (Failure "Invalid combination for access")
     )
     |OpInclude (OpString s) -> (
       let path = path_prefix ^ s in
       if Sys.file_exists path then (
         acc := (!acc) ^ (eval ~path_prefix:path_prefix (parsefile path))
       );
+      ValNone
+    )
+    |OpForEach (OpSymb k, v, body) -> (
+      (match (eval_i assignments v) with
+        |ValList l -> List.iter (fun x -> set_assigned ~must_exist:false k x assignments; ignore(eval_i assignments body)) l
+        |_ -> raise (Failure "Invalid type for foreach"));
+      ValNone
+    )
+    |OpForEachKV (OpSymb k, OpSymb v, vv, body) -> (
+      (match (eval_i assignments vv) with
+        |ValDict d -> Hashtbl.iter (fun x y -> set_assigned ~must_exist:false k x assignments; set_assigned v y assignments; ignore (eval_i assignments body)) d
+        |_ -> raise (Failure "Invalid type for foreach"));
       ValNone
     )
     |_ -> raise (Failure "Unimplemented")
@@ -372,8 +408,10 @@ let () =
       let bytes_length = Bytes.length asbytes in
       let oc = open_out (join ~joiner:"/" output_path) in
       output oc asbytes 0 bytes_length;
+      print_endline @@ "Output: " ^ (join ~joiner:"/" output_path);
       gen fs
     )
     | f::fs -> gen fs
     | [] -> ()
-  in gen ["source"]
+  in gen ["source"];
+  print_endline "Done!"

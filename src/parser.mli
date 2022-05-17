@@ -39,4 +39,7 @@ type ast =
   | OpProgram of ast
   | OpInclude of ast
   | OpNop
+  | OpRep of ast * ast * ast
+  | OpForEach of ast * ast * ast
+  | OpForEachKV of ast * ast * ast * ast
 val parse : Lexer.token list -> ast

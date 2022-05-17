@@ -20,7 +20,7 @@ open Lexer
   incdec := (Inc|Dec) <dot>
           | <dot> (Inc|Dec)?
 
-  pow := <term> {Pow <term>}*
+  pow := <incdec> {Pow <incdec>}*
 
   factor := <pow> {(Mul|Div) <pow>}*
 
@@ -33,11 +33,8 @@ open Lexer
              | <math_expr> GTE <math_expr>
              | <math_expr> LTE <math_expr>
              | <math_expr>
-
-  assign_expr := <symbol> (Equals|AddEquals|SubEquals|MulEquals|DivEquals|PowEquals) <expr>
   
-  expr := <assign_expr>
-        | <bool_expr>
+  expr := <bool_expr> ((Equals|AddEquals|SubEquals|MulEquals|DivEquals|PowEquals) <expr>)?
 
   expr_statement := <expr>
 
@@ -65,6 +62,8 @@ open Lexer
 
   include_statement := Include <literal>
 
+  foreach_statement := Foreach LParen <symbol> (Comma <symbol>)? in <expr> RParen <block>
+
   statement := function_def
              | expr_statement
              | for_loop
@@ -73,6 +72,7 @@ open Lexer
              | return_statement
              | let_statement
              | include_statement
+             | foreach_statement
              | <block>
              | Raw
   
@@ -122,6 +122,9 @@ type ast =
   |OpProgram of ast
   |OpInclude of ast
   |OpNop
+  |OpRep of ast * ast * ast
+  |OpForEach of ast * ast * ast
+  |OpForEachKV of ast * ast * ast * ast
 
 let parse t = 
   let tokens = ref t in
@@ -195,6 +198,7 @@ let parse t =
     match !tokens with
       |(TokNum n)::_ -> (eat_number (); OpNumber n)
       |(TokStr s)::_ -> (eat_string (); OpString s)
+      |(TokLBracket)::(TokRBracket)::_ -> (eat TokLBracket; eat TokRBracket; OpList [])
       |(TokLBracket)::_ -> (eat TokLBracket; let OpParamList v = paramlist () in eat TokRBracket; OpList v)
       |(TokLBrace)::_ -> (
         eat TokLBrace;
@@ -271,18 +275,19 @@ let parse t =
         |TokGTEquiv -> (eat TokGTEquiv; bool_expr_i (OpGTE(node, math_expr())))
         |_ -> node
     in bool_expr_i (math_expr ())
-  and assign_expr () =
+  and assign_expr lhs =
     match !tokens with
-      |(TokSym s)::TokEquals::_ -> (eat_symbol (); eat TokEquals; OpAssign(OpSymb s, expr ()))
-      |(TokSym s)::TokAddEquals::_ -> (eat_symbol (); eat TokAddEquals; OpAssign(OpSymb s, OpAdd(OpSymb s, expr ())))
-      |(TokSym s)::TokSubEquals::_ -> (eat_symbol (); eat TokSubEquals; OpAssign(OpSymb s, OpSub(OpSymb s, expr ())))
-      |(TokSym s)::TokMulEquals::_ -> (eat_symbol (); eat TokMulEquals; OpAssign(OpSymb s, OpMul(OpSymb s, expr ())))
-      |(TokSym s)::TokDivEquals::_ -> (eat_symbol (); eat TokDivEquals; OpAssign(OpSymb s, OpDiv(OpSymb s, expr ())))
-      |(TokSym s)::TokPowEquals::_ -> (eat_symbol (); eat TokPowEquals; OpAssign(OpSymb s, OpPow(OpSymb s, expr ())))
+      |TokEquals::_ -> (eat TokEquals; OpAssign(lhs, expr ()))
+      |TokAddEquals::_ -> (eat TokAddEquals; OpAssign(lhs, OpAdd(lhs, expr ())))
+      |TokSubEquals::_ -> (eat TokSubEquals; OpAssign(lhs, OpSub(lhs, expr ())))
+      |TokMulEquals::_ -> (eat TokMulEquals; OpAssign(lhs, OpMul(lhs, expr ())))
+      |TokDivEquals::_ -> (eat TokDivEquals; OpAssign(lhs, OpDiv(lhs, expr ())))
+      |TokPowEquals::_ -> (eat TokPowEquals; OpAssign(lhs, OpPow(lhs, expr ())))
   and expr () =
-    match !tokens with 
-      |(TokSym s)::(TokEquals|TokAddEquals|TokSubEquals|TokMulEquals|TokDivEquals|TokPowEquals)::_ -> assign_expr ()
-      |_ -> bool_expr ()
+    let lhs = bool_expr() in
+    match !tokens with
+      |(TokEquals|TokAddEquals|TokSubEquals|TokMulEquals|TokDivEquals|TokPowEquals)::_ -> assign_expr lhs
+      |_->lhs
   and expr_statement () = 
     expr ()
   and arglist () =
@@ -379,9 +384,10 @@ let parse t =
       |_ -> raise (syntax_error (peek () |> unwrap) (TokSym "Return"))
   and let_statement () =
     match !tokens with
-      |(TokSym "let")::_ -> (
+      |(TokSym "let")::(TokSym s)::_ -> (
         eat_symbol ();
-        let OpAssign (lhs, rhs) = assign_expr () in
+        eat_symbol ();
+        let OpAssign (lhs, rhs) = assign_expr (OpSymb s) in
         OpLetAssign (lhs, rhs)
       )
       |_ -> raise (syntax_error (peek () |> unwrap) (TokSym "Let"))
@@ -393,6 +399,29 @@ let parse t =
         OpInclude (OpString s)
       )
       |_ -> raise (syntax_error (peek () |> unwrap) (TokSym "Include"))
+  and foreach_statement () =
+    match !tokens with
+      |(TokSym "foreach")::(TokLParen)::(TokSym k)::(TokComma)::(TokSym v)::(TokSym "in")::_ -> (
+        eat_symbol ();
+        eat TokLParen;
+        eat_symbol ();
+        eat TokComma;
+        eat_symbol ();
+        eat_symbol ();
+        let vv = expr () in
+        eat TokRParen;
+        OpForEachKV (OpSymb k, OpSymb v, vv, block ())
+      )
+      |(TokSym "foreach")::(TokLParen)::(TokSym s)::(TokSym "in")::_ -> (
+        eat_symbol ();
+        eat TokLParen;
+        eat_symbol ();
+        eat_symbol ();
+        let v = expr () in
+        eat TokRParen;
+        OpForEach (OpSymb s, v, block ())
+      )
+      |_ -> raise (syntax_error (peek () |> unwrap) (TokSym "Foreach"))
   and statement () =
     match (peek () |> unwrap) with
       |TokSym "fn" -> function_def ()
@@ -402,6 +431,7 @@ let parse t =
       |TokSym "return" -> return_statement ()
       |TokSym "let" -> let_statement ()
       |TokSym "include" -> include_statement ()
+      |TokSym "foreach" -> foreach_statement ()
       |TokLBrace -> block ()
       |TokRaw r -> (eat_raw (); OpInsertRaw r)
       |_->expr_statement()
@@ -413,4 +443,7 @@ let parse t =
     OpStatementList !statementlist
   and program () =
     OpProgram (statement_list ())
-  in program ()
+  in 
+  let result = program () in
+  print_endline "Finished Parsing...";
+  result
